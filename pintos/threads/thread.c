@@ -27,6 +27,9 @@
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
 static struct list ready_list;
+static struct list sleep_list;
+
+static int64_t next_tick_to_awake;
 
 /* Idle thread. */
 static struct thread *idle_thread;
@@ -109,6 +112,7 @@ thread_init (void) {
 	lock_init (&tid_lock);
 	list_init (&ready_list);
 	list_init (&destruction_req);
+	list_init(&sleep_list); // 자야하는 리스트 초기화
 
 	/* Set up a thread structure for the running thread. */
 	initial_thread = running_thread ();
@@ -587,4 +591,43 @@ allocate_tid (void) {
 	lock_release (&tid_lock);
 
 	return tid;
+}
+
+
+void thread_sleep(int64_t ticks) {
+	// 1. 현재 쓰레드 가져오기
+	struct thread* current_thread = thread_current();
+	// 2. 현재 thread가 idle 형태인지 체크
+	if (current_thread == idle_thread) {
+		return;
+	} else {
+		// 3. 인터럽트 일시정시
+		enum intr_level old_level;
+		old_level = intr_disable();
+
+		// 4. tick 업데이트
+		current_thread->wakeup_tick = ticks;
+		update_next_tick_to_awake(current_thread->wakeup_tick);
+
+		// 5. 현재 thread 자기 전, sleep_list 뒤에 추가
+		list_push_back(&sleep_list, &current_thread->elem);
+		// 6. 현재 thread가 idle이 아니라면 block
+		thread_block();
+
+		// 7. 인터럽트 재시작
+		intr_set_level(old_level);
+	}
+}
+
+void thread_awake(int64_t wake_ticks) {
+	
+
+}
+
+void update_next_tick_to_awake(int64_t ticks) {
+	next_tick_to_awake = (next_tick_to_awake > ticks) ? (ticks) : next_tick_to_awake;
+}
+
+int64_t get_next_tick_to_awake(void) {
+	return next_tick_to_awake;
 }
