@@ -93,8 +93,14 @@ timer_sleep (int64_t ticks) {
 	int64_t start = timer_ticks ();
 
 	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+
+	// 알람을 맞춰서 알람시간에 한번에 일어남
+	thread_sleep(ticks + start);
+
+	// busy waits 방식
+	// while 루프를 반복하면서 시간이 되면 깨어나 일어날 시간인지 체크 후 일어날 시간이 아니면, 다시 잠
+	// while (timer_elapsed (start) < ticks)
+	// 	thread_yield ();
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -122,10 +128,21 @@ timer_print_stats (void) {
 }
 
 /* Timer interrupt handler. */
+/*
+ * ▶️ 매 tick마다 timer 인터럽트 시 호출되는 함수
+ * ▶️ sleep queue에서 깨어날 thread가 있는지 확인
+ * → sleep queue에서 가장 빨리 깨어날 쓰레드의 tick값 확인
+ * → 있다면 sleep queue를 순회하며 쓰레드 깨움 ( 밑에서 구현하는 thread_awake() 함수 사용 )
+ */
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
+
+	// sleep queue에서 가장 빨리 깨어날 쓰레드의 tick값 확인
+	if (get_next_tick_to_awake() <= ticks) {
+		thread_awake(ticks);
+	}
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

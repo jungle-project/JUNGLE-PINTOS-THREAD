@@ -619,9 +619,27 @@ void thread_sleep(int64_t ticks) {
 	}
 }
 
-void thread_awake(int64_t wake_ticks) {
-	
 
+/*
+ * ▶️ wakeup_tick값이 인자로 받은 ticks보다 크거나 같은 스레드를 깨움
+ * ▶️ 현재 대기중인 스레드들의 wakeup_tick변수 중 가장작은 값을 next_tick_to_awake 전역 변수에 저장
+ */
+void thread_awake(int64_t wake_ticks) {
+	next_tick_to_awake = INT64_MAX;
+
+	struct list_elem* next = list_begin(&sleep_list);
+
+	while (next != list_end(&sleep_list)) {
+		struct thread* cur = list_entry(next, struct thread, elem);
+
+		if (wake_ticks >= cur->wakeup_tick) {
+			next = list_remove(next);
+			thread_unblock(cur);
+		} else {
+			next = list_next(next);
+			update_next_tick_to_awake(cur->wakeup_tick);
+		}
+	}
 }
 
 void update_next_tick_to_awake(int64_t ticks) {
