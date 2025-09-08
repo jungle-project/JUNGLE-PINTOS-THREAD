@@ -148,5 +148,6 @@ void thread_sleep(int64_t ticks);
 void thread_awake(int64_t wake_ticks);
 void update_next_tick_to_awake(int64_t ticks);
 int64_t get_next_tick_to_awake(void);
+bool thread_wakeup_less(const struct list_elem* a, const struct list_elem* b, void* aux);
 
 #endif /* threads/thread.h */
