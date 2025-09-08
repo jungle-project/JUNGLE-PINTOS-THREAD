@@ -63,6 +63,16 @@ static void do_schedule(int status);
 static void schedule (void);
 static tid_t allocate_tid (void);
 
+// 2️⃣ ready_list "우선순위 내림차순"으로 관리
+static bool cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED){
+	const struct thread *ta = list_entry(a, struct thread, elem);
+    const struct thread *tb = list_entry(b, struct thread, elem);
+    return ta->priority > tb->priority;                           // 높은 priority가 앞
+}
+
+
+
+
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
 
@@ -92,6 +102,9 @@ static uint64_t gdt[3] = { 0, 0x00af9a000000ffff, 0x00cf92000000ffff };
 
    It is not safe to call thread_current() until this function
    finishes. */
+
+
+
 void
 thread_init (void) {
 	ASSERT (intr_get_level () == INTR_OFF);
@@ -176,6 +189,8 @@ thread_print_stats (void) {
    The code provided sets the new thread's `priority' member to
    PRIORITY, but no actual priority scheduling is implemented.
    Priority scheduling is the goal of Problem 1-3. */
+
+// 2️⃣
 tid_t
 thread_create (const char *name, int priority,
 		thread_func *function, void *aux) {
@@ -206,6 +221,7 @@ thread_create (const char *name, int priority,
 
 	/* Add to run queue. */
 	thread_unblock (t);
+	if (t->priority > thread_current()->priority)   thread_yield();         // 2️⃣ 더 높은 애가 생기면 바로 양보(선점)
 
 	return tid;
 }
@@ -232,18 +248,36 @@ thread_block (void) {
    be important: if the caller had disabled interrupts itself,
    it may expect that it can atomically unblock a thread and
    update other data. */
-void
-thread_unblock (struct thread *t) {
-	enum intr_level old_level;
 
-	ASSERT (is_thread (t));
+// 
+// void
+// thread_unblock (struct thread *t) {
+// 	enum intr_level old_level;
 
-	old_level = intr_disable ();
-	ASSERT (t->status == THREAD_BLOCKED);
-	list_push_back (&ready_list, &t->elem);
-	t->status = THREAD_READY;
-	intr_set_level (old_level);
+// 	ASSERT (is_thread (t));
+
+// 	old_level = intr_disable ();
+// 	ASSERT (t->status == THREAD_BLOCKED);
+// 	list_push_back (&ready_list, &t->elem);
+// 	t->status = THREAD_READY;
+// 	intr_set_level (old_level);
+// }
+// 2️⃣
+void thread_unblock(struct thread *t) {
+  enum intr_level old_level;
+  ASSERT(is_thread(t));
+
+  old_level = intr_disable();
+  ASSERT(t->status == THREAD_BLOCKED);
+
+  list_insert_ordered(&ready_list, &t->elem, cmp_priority, NULL);     // 2️⃣ "대기->정렬": 내림차순 => ready_list: 내림차순
+  t->status = THREAD_READY;
+
+  intr_set_level(old_level);
 }
+
+
+
 
 /* Returns the name of the running thread. */
 const char *
@@ -294,25 +328,36 @@ thread_exit (void) {
 
 /* Yields the CPU.  The current thread is not put to sleep and
    may be scheduled again immediately at the scheduler's whim. */
+// 2️⃣
 void
 thread_yield (void) {
 	struct thread *curr = thread_current ();
 	enum intr_level old_level;
 
 	ASSERT (!intr_context ());
-
 	old_level = intr_disable ();
+
 	if (curr != idle_thread)
-		list_push_back (&ready_list, &curr->elem);
+	    list_insert_ordered (&ready_list, &curr->elem, cmp_priority, NULL);   // 2️⃣ 자발적 양보: 내림차순 => ready_list: 내림차순
+		// list_push_back (&ready_list, &curr->elem);
 	do_schedule (THREAD_READY);
 	intr_set_level (old_level);
 }
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
+// 2️⃣ 우선순위 낮춤
 void
 thread_set_priority (int new_priority) {
 	thread_current ()->priority = new_priority;
+	
+    if (!list_empty (&ready_list)) {
+      struct thread *t = list_entry(list_front(&ready_list), struct thread, elem);
+	  if (t->priority > thread_current()->priority)
+		  thread_yield();                                    // ready에 나보다 높은 애가 있으면 즉시 양보
+  }
 }
+        
+
 
 /* Returns the current thread's priority. */
 int
