@@ -29,6 +29,12 @@ static bool too_many_loops (unsigned loops);
 static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
 
+// 1️⃣
+static struct list sleep_list;                  // sleep 스레드 저장소(깨울 시각 오름차순)
+static bool wake_less(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);  // 'sleep_list' 깨울 시각 오룸차순 위해
+static void wake_sleepers (void);              // 깨울 스레드 한 번에 처리 
+
+
 /* Sets up the 8254 Programmable Interval Timer (PIT) to
    interrupt PIT_FREQ times per second, and registers the
    corresponding interrupt. */
@@ -43,6 +49,7 @@ timer_init (void) {
 	outb (0x40, count >> 8);
 
 	intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+	list_init(&sleep_list);                    // 1️⃣ sleep_list 초기화   (list_init: 라이브러리 함수)
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -88,13 +95,28 @@ timer_elapsed (int64_t then) {
 }
 
 /* Suspends execution for approximately TICKS timer ticks. */
+// 1️⃣
 void
 timer_sleep (int64_t ticks) {
-	int64_t start = timer_ticks ();
+	if (ticks <= 0) return;                            // 예외 처리: 0이하면 복귀
 
-	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+	ASSERT (intr_get_level () == INTR_ON);            // 안전 체크 (인터럽트 ON)
+ 
+	int64_t wake = timer_ticks () + ticks;            // 지금 시각(틱 수) + 얼마나 잘지 = "깨울 절대 시각"을 계산
+	struct thread *cur = thread_current ();           // 현재 스레드
+
+	enum intr_level old = intr_disable ();            // 현재 인터럽트 상태를 old에 저장 + 인터럽트 off(방해 금지 모드)
+	cur->wakeup_tick = wake;                          // 내가 깰 시각
+
+	list_insert_ordered (&sleep_list, &cur->elem, wake_less, NULL);             // sleep_list(잠자는 명단)에 A를 정렬 유지하며 삽입
+
+	thread_block();                                                            // A의 상태: RUNNING → BLOCKED
+	intr_set_level(old);                                                       // 이전 상태로 정확히 되돌림
+	// int64_t start = timer_ticks ();
+
+	// ASSERT (intr_get_level () == INTR_ON);
+	// while (timer_elapsed (start) < ticks)
+	// 	thread_yield ();
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -121,11 +143,36 @@ timer_print_stats (void) {
 	printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
 
+
+// 1️⃣ a -> b 정렬 비교 함수(=> 'a'가 우선)
+static bool wake_less(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED){
+	const struct thread *ta = list_entry(a, struct thread, elem);
+	const struct thread *tb = list_entry(b, struct thread, elem);
+	
+	if(ta->wakeup_tick != tb->wakeup_tick)
+		return ta->wakeup_tick < tb->wakeup_tick;       // 깨울 시각 '이른' 스레드 앞
+	return ta->priority > tb->priority;                 // 같은 시간 => 우선 순위 '높은게' 앞
+}
+
+// 1️⃣ 스레드 깨우기
+static void wake_sleepers(void){
+	int64_t now = timer_ticks();                                       // 지금 시각(현재 전체 틱 수)
+	while(!list_empty (&sleep_list)){                                  
+		struct thread *t = list_entry(list_front(&sleep_list), struct thread, elem);     // 맨 앞 깨울 스레드
+
+		if (t->wakeup_tick > now) break;                                                 // IF, 깨울 시각 전 -> 종료
+		list_pop_front (&sleep_list);                                                    // 깨울 시간 다 됨 -> 맨 앞 스레드 pop
+		thread_unblock (t);                                                              // 스레드 t를 BLOCKED → READY 상태로 바꿈(레디 큐에 넣음)
+	}
+
+}
+
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
+	wake_sleepers();     // 이번 tick에 깨어날 스레드들만 O(k)으로 깨움
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
