@@ -221,7 +221,7 @@ thread_create (const char *name, int priority,
 
 	/* Add to run queue. */
 	thread_unblock (t);
-	if (t->priority > thread_current()->priority)   thread_yield();         // 2️⃣ 더 높은 애가 생기면 바로 양보(선점)
+	if (t->priority > thread_current()->priority)   thread_yield();       // 2️⃣ 더 높은 애가 생기면 바로 양보(선점)
 
 	return tid;
 }
@@ -345,17 +345,29 @@ thread_yield (void) {
 }
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
-// 2️⃣ 우선순위 낮춤
-void
-thread_set_priority (int new_priority) {
-	thread_current ()->priority = new_priority;
+// 2️⃣3️⃣ 우선순위 낮춤
+void thread_set_priority (int new_priority) {
+	struct thread *cur = thread_current();
+
+     
+    cur->base_priority = new_priority;         // 3️⃣donation-one 대비: 원래 우선순위도 갱신
+    cur->priority = new_priority;
+
+     // 3️⃣ ready_list 맨 앞(최고 우선순위)이 나보다 높으면 즉시 양보
+    if (!list_empty(&ready_list)) {
+        struct thread *top = list_entry(list_front(&ready_list), struct thread, elem);
+        if (top->priority > cur->priority)
+           thread_yield();
+	}
+
+	// thread_current ()->priority = new_priority;
 	
-    if (!list_empty (&ready_list)) {
-      struct thread *t = list_entry(list_front(&ready_list), struct thread, elem);
-	  if (t->priority > thread_current()->priority)
-		  thread_yield();                                    // ready에 나보다 높은 애가 있으면 즉시 양보
+    // if (!list_empty (&ready_list)) {
+    //   struct thread *t = list_entry(list_front(&ready_list), struct thread, elem);
+	//   if (t->priority > thread_current()->priority)
+	// 	  thread_yield();                                    // ready에 나보다 높은 애가 있으면 즉시 양보
   }
-}
+
         
 
 
@@ -453,6 +465,7 @@ init_thread (struct thread *t, const char *name, int priority) {
 	strlcpy (t->name, name, sizeof t->name);
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
 	t->priority = priority;
+	t->base_priority = priority;            // 3️⃣ 원래 우선순위 저장
 	t->magic = THREAD_MAGIC;
 }
 
