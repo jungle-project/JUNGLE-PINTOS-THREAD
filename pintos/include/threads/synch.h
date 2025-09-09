@@ -10,6 +10,11 @@ struct semaphore {
 	struct list waiters;        /* List of waiting threads. */
 };
 
+struct semaphore_elem {
+  struct list_elem elem;   // cond->waiters에 들어갈 노드
+  struct semaphore semaphore;   // 이 waiter만 깨우는 개인 세마(초기값 0)
+};
+
 void sema_init (struct semaphore *, unsigned value);
 void sema_down (struct semaphore *);
 bool sema_try_down (struct semaphore *);

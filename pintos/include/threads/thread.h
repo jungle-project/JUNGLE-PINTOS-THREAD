@@ -138,6 +138,13 @@ const char *thread_name (void);
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
 
+void refresh_priority(struct thread *t);
+void donate_chain(struct thread *donor);
+void remove_donations(struct thread *t, struct lock *lock);
+bool cmp_priority(const struct list_elem *a,
+						 const struct list_elem *b,
+						 void *aux UNUSED);
+
 int thread_get_priority (void);
 void thread_set_priority (int);
 

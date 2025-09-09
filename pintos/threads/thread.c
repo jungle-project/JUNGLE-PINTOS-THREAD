@@ -62,16 +62,15 @@ static void init_thread(struct thread *, const char *name, int priority);
 static void do_schedule(int status);
 static void schedule(void);
 static tid_t allocate_tid(void);
-static bool cmp_priority(const struct list_elem *a,
+bool cmp_priority(const struct list_elem *a,
 						 const struct list_elem *b,
 						 void *aux UNUSED);
 static bool cmp_donation_desc(const struct list_elem *a,
-							  const struct list_elem *b,
-							  void *aux UNUSED);
+                               const struct list_elem *b, void *aux UNUSED);
 void refresh_priority(struct thread *t);
-void donate_chain(struct thread *donor);
-void remove_donations_for_lock(struct thread *t, struct lock *lock);
-
+static void donation_upsert(struct thread *donor, struct thread *holder);
+void donation(struct thread *donor);
+void remove_donations(struct thread *t, struct lock *lock);
 
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
@@ -164,91 +163,13 @@ void thread_tick(void)
 		intr_yield_on_return();
 }
 
-static bool cmp_priority(const struct list_elem *a,
+bool cmp_priority(const struct list_elem *a,
 						 const struct list_elem *b,
 						 void *aux UNUSED)
 {
 	const struct thread *ta = list_entry(a, struct thread, elem);
 	const struct thread *tb = list_entry(b, struct thread, elem);
 	return ta->priority > tb->priority;
-}
-
-
-// 우선순위 기부 비교 함수 (내림차순)
-static bool cmp_donation_desc(const struct list_elem *a,
-							  const struct list_elem *b,
-							  void *aux UNUSED)
-{
-	const struct thread *ta = list_entry(a, struct thread, elem);
-	const struct thread *tb = list_entry(b, struct thread, elem);
-	return ta->priority > tb->priority;
-}
-
-void refresh_priority(struct thread *t)
-{
-	// 우선순위 기부 리스트가 비어있다면 본래 우선순위로 복구
-	if (list_empty(&t->donations))
-	{
-		t->priority = t->base_priority;
-	}
-	else
-	{
-		// 우선순위 기부 리스트가 비어있지 않다면, 가장 높은 우선순위로 갱신
-		list_sort(&t->donations, cmp_donation_desc, NULL);
-		struct list_elem *e = list_front(&t->donations);
-		struct thread *t = list_entry(e, struct thread, elem);
-		if (t->priority > t->base_priority)
-			t->priority = t->priority;
-		else
-			t->priority = t->base_priority;
-	}
-}
-
-static void donate_once(struct thread *donor, struct thread *holder)
-{
-	struct list_elem *e;
-	for (e = list_begin(&holder->donations); e != list_end(&holder->donations); e = list_next(e))
-	{
-		struct thread *t = list_entry(e, struct thread, elem);
-		if (t == donor) {
-			list_remove(e);
-			break;
-		}
-		list_insert_ordered(&holder->donations, &donor->elem, cmp_donation_desc, NULL);
-		refresh_priority(holder);
-	}
-}
-
-void donate_chain(struct thread *donor) {
-  int depth = 0;
-  struct lock *lk = donor->waiting_lock;
-  while (lk && lk->holder && depth++ < 8) {
-    struct thread *holder = lk->holder;
-    donate_once(donor, holder);
-    // holder가 ready_list 안에 있다면 재정렬 필요(안전용)
-    // list_remove + list_insert_ordered(&ready_list, ...) 할 수도 있고,
-    // 보수적으로 list_sort(&ready_list, cmp_priority, NULL) 도 OK
-    lk = holder->waiting_lock;
-  }
-}
-
-void remove_donations_for_lock(struct thread *t, struct lock *lock)
-{
-	struct list_elem *e = list_begin(&t->donations);
-	while (e != list_end(&t->donations))
-	{
-		struct thread *donor = list_entry(e, struct thread, elem);
-		struct list_elem *next = list_next(e);
-		if (donor->waiting_lock == lock)
-		{
-			list_remove(e);
-		}
-		else
-		{
-			e = next;
-		}
-	}
-	refresh_priority(t);
 }
 
 /* Prints thread statistics. */
@@ -346,7 +267,6 @@ void thread_unblock(struct thread *t)
 
 	intr_set_level(old_level);
 }
-
 /* Returns the name of the running thread. */
 const char *
 thread_name(void)
@@ -412,35 +332,100 @@ void thread_yield(void)
 	intr_set_level(old_level);
 }
 
+static bool cmp_donation_desc(const struct list_elem *a,
+                              const struct list_elem *b, void *aux UNUSED) {
+  const struct thread *ta = list_entry(a, struct thread, donation_elem);
+  const struct thread *tb = list_entry(b, struct thread, donation_elem);
+  return ta->priority > tb->priority; // 큰 값이 앞
+}
+
+// t의 우선순위를 base_priority와 donations 리스트를 참고하여 갱신
+void refresh_priority(struct thread *t) {
+  t->priority = t->base_priority;
+  if (!list_empty(&t->donations)) {
+	// donations 리스트의 최상단 스레드 우선순위로 갱신
+    struct thread *top = list_entry(list_front(&t->donations),
+                                    struct thread, donation_elem);
+   	 	if (top->priority > t->priority) {
+			t->priority = top->priority;
+		}
+  }
+}
+
+static void donation_upsert(struct thread *donor, struct thread *holder) {
+  // holder->donations 안에 donor가 있으면 제거 후 다시 삽입(우선순위 변동 대비)
+  for (struct list_elem *e = list_begin(&holder->donations); 
+       e != list_end(&holder->donations); e = list_next(e)) {
+    if (list_entry(e, struct thread, donation_elem) == donor) { // donor 가 존재
+      list_remove(e);
+      break;
+    }
+  }
+  list_insert_ordered(&holder->donations, &donor->donation_elem,
+                      cmp_donation_desc, NULL);
+  refresh_priority(holder);
+}
+
+void donation (struct thread *donor) {
+	enum intr_level old_level = intr_disable();
+	struct thread *start = donor;
+	struct lock *lock = donor->waiting_lock;
+	int depth = 0;
+
+	// 최대 8단계까지 우선순위 기부
+	// 락이 걸려있고, 락 홀더가 존재할 때 && depth < 8
+	while (lock && lock->holder && depth++ < 8) {
+		struct thread *holder = lock->holder;
+		donation_upsert(start, holder);
+		start = holder;
+		lock = holder->waiting_lock;
+	}
+	intr_set_level(old_level);
+}
+
+// t의 donations 리스트에서 lock을 기다리는 스레드들을 모두 제거
+void remove_donations(struct thread *t, struct lock *lock) {
+  enum intr_level old_level = intr_disable();
+  struct list_elem *e = list_begin(&t->donations);
+  while (e != list_end(&t->donations)) {
+	
+    struct list_elem *next = list_next(e);
+    struct thread *d = list_entry(e, struct thread, donation_elem);
+    if (d->waiting_lock == lock) list_remove(e);
+    e = next;
+  }
+  refresh_priority(t);
+  intr_set_level(old_level);
+}
+
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void thread_set_priority(int new_priority)
 {
-  enum intr_level old = intr_disable();
-
+  enum intr_level old = intr_disable();   // 리스트/상태 조작 보호
   struct thread *cur = thread_current();
-  cur->base_priority = new_priority;   // ★ 본래 우선순위 업데이트
-  refresh_priority(cur);               // ★ 도네이션 고려하여 최종 priority 재계산
 
-  // ready_list 정렬 보수
+  cur->base_priority = new_priority;      // 본래 우선순위만 갱신
+  refresh_priority(cur);                  // donations 고려해 최종 priority 재계산
+
+  // (선택) 보수적으로 ready_list 정렬 유지
   if (!list_empty(&ready_list))
     list_sort(&ready_list, cmp_priority, NULL);
 
-  // 더 높은 애가 ready면 양보
+  // 더 높은 스레드가 대기 중이면, 인터럽트 켠 뒤 양보
+  bool need_yield = false;
   if (!list_empty(&ready_list)) {
     struct thread *top = list_entry(list_front(&ready_list), struct thread, elem);
-    if (top->priority > cur->priority) {
-      intr_set_level(old);
-      thread_yield();
-      return;
-    }
+    if (top->priority > cur->priority) need_yield = true;
   }
+
   intr_set_level(old);
+  if (need_yield) thread_yield();
 }
 
 /* Returns the current thread's priority. */
 int thread_get_priority(void)
 {
-	return thread_current()->priority;
+  return thread_current()->priority;
 }
 
 /* Sets the current thread's nice value to NICE. */
@@ -535,8 +520,7 @@ init_thread(struct thread *t, const char *name, int priority)
 	t->tf.rsp = (uint64_t)t + PGSIZE - sizeof(void *);
 	t->priority = priority;
 	t->magic = THREAD_MAGIC;
-
-	// 우선순위 기부 관련 초기화
+	// 도네이션 관련 초기화
 	t->base_priority = priority;
 	list_init(&t->donations);
 	t->waiting_lock = NULL;
