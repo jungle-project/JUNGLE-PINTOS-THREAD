@@ -41,6 +41,14 @@
 
    - up or "V": increment the value (and wake up one waiting
    thread, if any). */
+
+// 3️⃣ 대기자 정렬(내림차순)
+static bool waiter_cmp_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED){
+	const struct thread *ta = list_entry(a, struct thread, elem);
+    const struct thread *tb = list_entry(b, struct thread, elem);
+    return ta->priority > tb->priority;                       /* 내림차순(큰 priority가 앞) */
+}
+
 void
 sema_init (struct semaphore *sema, unsigned value) {
 	ASSERT (sema != NULL);
@@ -57,20 +65,22 @@ sema_init (struct semaphore *sema, unsigned value) {
    interrupts disabled, but if it sleeps then the next scheduled
    thread will probably turn interrupts back on. This is
    sema_down function. */
-void
-sema_down (struct semaphore *sema) {
+
+// 3️⃣ 정렬 삽입
+void sema_down (struct semaphore *sema) {
 	enum intr_level old_level;
 
 	ASSERT (sema != NULL);
 	ASSERT (!intr_context ());
 
-	old_level = intr_disable ();
+	old_level = intr_disable ();                           // 인터럽트 OFF
 	while (sema->value == 0) {
-		list_push_back (&sema->waiters, &thread_current ()->elem);
-		thread_block ();
+		// list_push_back (&sema->waiters, &thread_current ()->elem);   // FIFO
+		list_insert_ordered(&sema->waiters, &thread_current()->elem, waiter_cmp_priority, NULL);  // 3️⃣ 대기열에 현재 스레드를 '우선순위 내림차순'으로 삽입
+		thread_block ();                                     // 현재 스레드 Block
 	}
-	sema->value--;
-	intr_set_level (old_level);
+	sema->value--;                                           // 티켓 1개 감소
+	intr_set_level (old_level);                              // 인터럽트 ON
 }
 
 /* Down or "P" operation on a semaphore, but only if the
@@ -102,18 +112,36 @@ sema_try_down (struct semaphore *sema) {
    and wakes up one thread of those waiting for SEMA, if any.
 
    This function may be called from an interrupt handler. */
-void
-sema_up (struct semaphore *sema) {
-	enum intr_level old_level;
 
-	ASSERT (sema != NULL);
+// 3️⃣ 최고 우선순위 선점시키기
+void sema_up (struct semaphore *sema) {
+	enum intr_level old_level;                      // 인터럽트 상태 저장
+	struct thread *to_unblock = NULL;              // 3️⃣ 깨울 대상 스레드 포인터
+    bool need_yield = false;                       // 3️⃣ CPU를 양보할지 여부를 기록할 플래그
 
-	old_level = intr_disable ();
-	if (!list_empty (&sema->waiters))
-		thread_unblock (list_entry (list_pop_front (&sema->waiters),
-					struct thread, elem));
-	sema->value++;
-	intr_set_level (old_level);
+	ASSERT (sema != NULL);                          // 방어 코드
+
+	old_level = intr_disable ();                     // 인터럽트 OFF
+
+	if (!list_empty (&sema->waiters)){
+		list_sort(&sema->waiters, waiter_cmp_priority, NULL);                               // 안전 장치(한 번 더 정렬)
+		to_unblock = list_entry(list_pop_front(&sema->waiters), struct thread, elem);      // 3️⃣ 맨 앞(=최고 우선순위) 대기자를 꺼냄(pop) 
+
+		thread_unblock(to_unblock);                                                        // READY 상태로 전환
+
+		if (to_unblock->priority > thread_current()->priority) {                           // 방금 깨운 스레드가 지급보다 우선순위가 높으면 → 선점 필요
+			if (intr_context()) intr_yield_on_return();                                    // IF, 인터럽트 핸들러 안 -> 이번 인터럽트 리턴(처리 끝나고 원래 스레드로 돌아가기 직전) 때 yield 해라
+            else  need_yield = true;                                                       // 그 외(일반 스레드 컨텍스트) ->  나중에 양보하도록 플래그만 세움 ✔️
+
+		// 	thread_unblock (list_entry (list_pop_front (&sema->waiters),struct thread, elem));
+	    // sema->value++;
+	    // intr_set_level (old_level);
+        }
+    }
+	sema->value++;                               // 세마포어 값 증가(티켓 반납)
+	intr_set_level(old_level);                   // 인터럽트 ON
+
+	if (need_yield) thread_yield();             // 3️⃣ 인터럽트가 켜진 뒤에 실제로 CPU를 양보 ✔️
 }
 
 static void sema_test_helper (void *sema_);

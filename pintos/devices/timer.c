@@ -164,7 +164,6 @@ static void wake_sleepers(void){
 		list_pop_front (&sleep_list);                                                    // 깨울 시간 다 됨 -> 맨 앞 스레드 pop
 		thread_unblock (t);                                                              // 스레드 t를 BLOCKED → READY 상태로 바꿈(레디 큐에 넣음)
 	}
-
 }
 
 /* Timer interrupt handler. */
@@ -172,7 +171,7 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
-	wake_sleepers();     // 이번 tick에 깨어날 스레드들만 O(k)으로 깨움
+	wake_sleepers();     // 1️⃣이번 tick에 깨어날 스레드들만 O(k)으로 깨움
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
