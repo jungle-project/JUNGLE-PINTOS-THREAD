@@ -28,6 +28,8 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+
+// 최대 (4 * 2^23)
 /* A kernel thread or user process.
  *
  * Each thread structure is stored in its own 4 kB page.  The
@@ -91,7 +93,10 @@ struct thread {
 	enum thread_status status;          /* Thread state. */
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
-	int64_t wakeup_tick;
+	int64_t wakeup_tick;				// 일어날 시간
+	int original_priority;				// 기존 우선순위
+	struct lock* waiting_on_lock;		/* 현재 스레드가 현재 획득을 기다리는 락 */
+	struct list holding_locks;			// 현재 스레드가 소유한 락의 목록
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
@@ -148,6 +153,6 @@ void thread_sleep(int64_t ticks);
 void thread_awake(int64_t wake_ticks);
 void update_next_tick_to_awake(int64_t ticks);
 int64_t get_next_tick_to_awake(void);
-bool thread_wakeup_less(const struct list_elem* a, const struct list_elem* b, void* aux);
+bool thread_priority_comp(const struct list_elem* a, const struct list_elem* b, void* aux);
 
 #endif /* threads/thread.h */

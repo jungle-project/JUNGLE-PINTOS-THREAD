@@ -137,7 +137,7 @@ timer_print_stats (void) {
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
-	thread_tick ();
+	thread_tick();
 
 	// sleep queue에서 가장 빨리 깨어날 쓰레드의 tick값 확인
 	if (get_next_tick_to_awake() <= ticks) {
