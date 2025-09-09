@@ -42,7 +42,7 @@
    - up or "V": increment the value (and wake up one waiting
    thread, if any). */
 
-// 3️⃣ 대기자 정렬(내림차순)
+// 2️⃣ 대기자 정렬(내림차순)
 static bool waiter_cmp_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED){
 	const struct thread *ta = list_entry(a, struct thread, elem);
     const struct thread *tb = list_entry(b, struct thread, elem);
@@ -66,7 +66,7 @@ sema_init (struct semaphore *sema, unsigned value) {
    thread will probably turn interrupts back on. This is
    sema_down function. */
 
-// 3️⃣ 정렬 삽입
+// 2️⃣ 정렬 삽입
 void sema_down (struct semaphore *sema) {
 	enum intr_level old_level;
 
@@ -113,11 +113,11 @@ sema_try_down (struct semaphore *sema) {
 
    This function may be called from an interrupt handler. */
 
-// 3️⃣ 최고 우선순위 선점시키기
+// 2️⃣ 최고 우선순위 선점시키기
 void sema_up (struct semaphore *sema) {
 	enum intr_level old_level;                      // 인터럽트 상태 저장
-	struct thread *to_unblock = NULL;              // 3️⃣ 깨울 대상 스레드 포인터
-    bool need_yield = false;                       // 3️⃣ CPU를 양보할지 여부를 기록할 플래그
+	struct thread *to_unblock = NULL;              // 2️⃣ 깨울 대상 스레드 포인터
+    bool need_yield = false;                       // 2️⃣ CPU를 양보할지 여부를 기록할 플래그
 
 	ASSERT (sema != NULL);                          // 방어 코드
 
@@ -125,7 +125,7 @@ void sema_up (struct semaphore *sema) {
 
 	if (!list_empty (&sema->waiters)){
 		list_sort(&sema->waiters, waiter_cmp_priority, NULL);                               // 안전 장치(한 번 더 정렬)
-		to_unblock = list_entry(list_pop_front(&sema->waiters), struct thread, elem);      // 3️⃣ 맨 앞(=최고 우선순위) 대기자를 꺼냄(pop) 
+		to_unblock = list_entry(list_pop_front(&sema->waiters), struct thread, elem);      // 2️⃣ 맨 앞(=최고 우선순위) 대기자를 꺼냄(pop) 
 
 		thread_unblock(to_unblock);                                                        // READY 상태로 전환
 
@@ -141,7 +141,7 @@ void sema_up (struct semaphore *sema) {
 	sema->value++;                               // 세마포어 값 증가(티켓 반납)
 	intr_set_level(old_level);                   // 인터럽트 ON
 
-	if (need_yield) thread_yield();             // 3️⃣ 인터럽트가 켜진 뒤에 실제로 CPU를 양보 ✔️
+	if (need_yield) thread_yield();             // 2️⃣ 인터럽트가 켜진 뒤에 실제로 CPU를 양보 ✔️
 }
 
 static void sema_test_helper (void *sema_);
@@ -280,6 +280,19 @@ cond_init (struct condition *cond) {
 	list_init (&cond->waiters);
 }
 
+// 2️⃣ condvar 정렬
+static bool cond_sema_cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+  struct semaphore_elem *sa = list_entry(a, struct semaphore_elem, elem);
+  struct semaphore_elem *sb = list_entry(b, struct semaphore_elem, elem);
+
+  // 각 세마포어의 waiters 맨 앞(thread)의 priority 비교
+  struct thread *ta = list_entry(list_front(&sa->semaphore.waiters), struct thread, elem);
+  struct thread *tb = list_entry(list_front(&sb->semaphore.waiters), struct thread, elem);
+
+  return ta->priority > tb->priority;  // 내림차순
+}
+
+
 /* Atomically releases LOCK and waits for COND to be signaled by
    some other piece of code.  After COND is signaled, LOCK is
    reacquired before returning.  LOCK must be held before calling
@@ -330,9 +343,15 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED) {
 	ASSERT (!intr_context ());
 	ASSERT (lock_held_by_current_thread (lock));
 
-	if (!list_empty (&cond->waiters))
-		sema_up (&list_entry (list_pop_front (&cond->waiters),
-					struct semaphore_elem, elem)->semaphore);
+	// 2️⃣ condvar
+	if (!list_empty (&cond->waiters)){
+		// sema_up (&list_entry (list_pop_front (&cond->waiters), struct semaphore_elem, elem)->semaphore);
+        list_sort(&cond->waiters, cond_sema_cmp_priority, NULL);                                                // (1) cond->waiters를 “각 세마가 깨울 최고 우선순위 스레드” 기준으로 정렬
+
+        struct semaphore_elem *se = list_entry(list_pop_front(&cond->waiters), struct semaphore_elem, elem);    // (2) 맨 앞(= 가장 높은 우선순위를 깨울 수 있는 세마)을 꺼내고
+
+        sema_up(&se->semaphore);   //// (3) 그 세마를 올려서(sema_up) 해당 스레드를 깨움
+  }
 }
 
 /* Wakes up all threads, if any, waiting on COND (protected by
