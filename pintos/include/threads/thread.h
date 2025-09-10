@@ -91,8 +91,13 @@ struct thread {
 	enum thread_status status;          /* Thread state. */
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
-	int base_priority;                  // 3️⃣ Donation 해제 시 복원할 원래 우선순위
+	int base_priority;                  // 3️⃣ Donation 해제 시 복원할 원래 우선순위(-one)
 	int64_t wakeup_tick;                // 1️⃣ 깨울 시각
+
+	// 3️⃣ donate-multiple
+	struct lock *waiting_lock;             // 지금 기다리는 락 (중첩 기부 전파용)
+    struct list donations;                 // 나에게 기부한 스레드들
+    struct list_elem donation_elem;        // 내가 남 donations에 들어갈 때 쓰는 elem 
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
@@ -144,5 +149,12 @@ int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
 void do_iret (struct intr_frame *tf);
+
+
+// 3️⃣ Donation helpers (multiple & nest)
+void thread_refresh_priority(struct thread *t);
+void thread_remove_donations_with_lock(struct lock *lock);       // 락 해제 시 기부 회수
+void thread_donate_chain(struct thread *donor);                 // [NEST] 최대 8단계 전파 
+void thread_yield_if_lower(void);                               // 최고 우선순위가 아니면 양보
 
 #endif /* threads/thread.h */

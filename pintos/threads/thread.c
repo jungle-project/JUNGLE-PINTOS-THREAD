@@ -70,6 +70,61 @@ static bool cmp_priority(const struct list_elem *a, const struct list_elem *b, v
     return ta->priority > tb->priority;                           // 높은 priority가 앞
 }
 
+// 3️⃣ Donation 헬퍼 함수
+/* READY 상태면 ready_list 내 재배치 */
+static void ready_reinsert_if_needed(struct thread *t) {
+  if (t->status == THREAD_READY) {
+    list_remove(&t->elem);
+    list_insert_ordered(&ready_list, &t->elem, cmp_priority, NULL);
+  }
+}
+
+/* donations 리스트에서 최댓값을 찾아 base와 비교해 유효 우선순위를 갱신 */
+void thread_refresh_priority(struct thread *t) {
+  int newp = t->base_priority;                                                     // 원래 값에서 시작
+  for (struct list_elem *e = list_begin(&t->donations);                            // 모든 기부자를 훑어
+       e != list_end(&t->donations); e = list_next(e)) {
+    struct thread *donor = list_entry(e, struct thread, donation_elem);
+    if (donor->priority > newp) newp = donor->priority;                              // 도너의 "현재 유효" 우선순위 사용
+  }
+  int oldp = t->priority; 
+  t->priority = newp;                                                               // 새 유효 우선순위 커밋
+  if (newp != oldp) ready_reinsert_if_needed(t);                                    // 값이 변했으면 -> READY면 큐 정렬 복구
+}
+
+/* 최고 우선순위가 아니면 즉시 양보 */
+void thread_yield_if_lower(void) {
+  if (!list_empty(&ready_list)) {
+    struct thread *top = list_entry(list_front(&ready_list), struct thread, elem);
+    if (top->priority > thread_current()->priority) thread_yield();
+  }
+}
+
+/* 이 락으로부터 온 기부만 제거 (락 해제 시 사용) */
+void thread_remove_donations_with_lock(struct lock *lock) {
+  struct thread *cur = thread_current();                                      // 기부를 "받는" 쪽 = 현재 스레드
+  for (struct list_elem *e = list_begin(&cur->donations);
+       e != list_end(&cur->donations); ) {
+    struct thread *donor = list_entry(e, struct thread, donation_elem);
+    struct list_elem *next = list_next(e);
+    if (donor->waiting_lock == lock) list_remove(e);
+    e = next;
+  }
+}
+
+/* [NEST] 기다리는 락 체인을 따라 위로 전파 (최대 8단계) */
+void thread_donate_chain(struct thread *donor) {         
+  int depth = 0;                                         
+  struct lock *lk = donor->waiting_lock;                 
+  while (lk && lk->holder && depth < 8) {                
+    struct thread *holder = lk->holder;                  
+    thread_refresh_priority(holder);                     
+    lk = holder->waiting_lock;                           
+    depth++;                                             
+  }                                                     
+}
+// 3️⃣
+
 
 
 
@@ -347,18 +402,24 @@ thread_yield (void) {
 /* Sets the current thread's priority to NEW_PRIORITY. */
 // 2️⃣3️⃣ 우선순위 낮춤
 void thread_set_priority (int new_priority) {
-	struct thread *cur = thread_current();
+   enum intr_level old = intr_disable();
+   struct thread *cur = thread_current();
+   cur->base_priority = new_priority;     /* 본래값만 갱신 */
+   thread_refresh_priority(cur);          /* donors 고려 재계산 */
+   intr_set_level(old);
+   thread_yield_if_lower();               /* 최고가 아니면 양보 */
+	// struct thread *cur = thread_current();
 
      
-    cur->base_priority = new_priority;         // 3️⃣donation-one 대비: 원래 우선순위도 갱신
-    cur->priority = new_priority;
+    // cur->base_priority = new_priority;         // 3️⃣donation-one 대비: 원래 우선순위도 갱신
+    // cur->priority = new_priority;
 
-     // 3️⃣ ready_list 맨 앞(최고 우선순위)이 나보다 높으면 즉시 양보
-    if (!list_empty(&ready_list)) {
-        struct thread *top = list_entry(list_front(&ready_list), struct thread, elem);
-        if (top->priority > cur->priority)
-           thread_yield();
-	}
+    //  // 3️⃣ ready_list 맨 앞(최고 우선순위)이 나보다 높으면 즉시 양보
+    // if (!list_empty(&ready_list)) {
+    //     struct thread *top = list_entry(list_front(&ready_list), struct thread, elem);
+    //     if (top->priority > cur->priority)
+    //        thread_yield();
+	// }
 
 	// thread_current ()->priority = new_priority;
 	
@@ -465,7 +526,9 @@ init_thread (struct thread *t, const char *name, int priority) {
 	strlcpy (t->name, name, sizeof t->name);
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
 	t->priority = priority;
-	t->base_priority = priority;            // 3️⃣ 원래 우선순위 저장
+	t->base_priority = priority;            // 3️⃣ 원래 우선순위 저장(One)  => 복원 기준
+	list_init(&t->donations);               // 3️⃣ 기부자 목록 초기화(muti)
+    t->waiting_lock = NULL;                 // 3️⃣ 현재 기다리는 락X(muti)
 	t->magic = THREAD_MAGIC;
 }
 
