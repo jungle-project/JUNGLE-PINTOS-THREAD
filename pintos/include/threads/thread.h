@@ -154,5 +154,6 @@ int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
 void do_iret (struct intr_frame *tf);
+struct list* get_ready_list();
 
 #endif /* threads/thread.h */

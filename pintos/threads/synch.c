@@ -62,6 +62,10 @@ static bool sema_priority_cmp(const struct list_elem *a,
 
 	// 우선순위 비교 큰 값이 앞
 	return ta->priority > tb->priority;
+   // 위는 cond_signal시 정렬하는 경우 비교자
+   // 아래는 cond_wait 삽입 시 정렬하는 경우 비교자
+
+   // return sa->priority > sb->priority;
 }
 
 /* Down or "P" operation on a semaphore.  Waits for SEMA's value
@@ -325,6 +329,24 @@ cond_wait (struct condition *cond, struct lock *lock) {
 	lock_acquire (lock);
 }
 
+// void
+// cond_wait (struct condition *cond, struct lock *lock) {
+// 	struct semaphore_elem waiter;
+
+// 	ASSERT (cond != NULL);
+// 	ASSERT (lock != NULL);
+// 	ASSERT (!intr_context ());
+// 	ASSERT (lock_held_by_current_thread (lock));
+
+// 	sema_init (&waiter.semaphore, 0);
+// 	waiter.priority = thread_current()->priority;
+// 	// list_push_back (&cond->waiters, &waiter.elem);
+// 	list_insert_ordered(&cond->waiters, &waiter.elem, sema_priority_cmp, NULL);
+// 	lock_release (lock);
+// 	sema_down (&waiter.semaphore);
+// 	lock_acquire (lock);
+// }
+
 /* If any threads are waiting on COND (protected by LOCK), then
    this function signals one of them to wake up from its wait.
    LOCK must be held before calling this function.
@@ -346,6 +368,27 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED) {
     sema_up(&w->semaphore);
   }
 }
+
+// 위는 시그널을 보낼 때 정렬 후 POP하는 경우,
+// 아래는 정렬삽입 후 시그널을 보낼땐 그냥 POP하는 경우
+// sema_priority_cmp 함수 수정 필요.
+
+// void
+// cond_signal (struct condition *cond, struct lock *lock UNUSED) {
+// 	ASSERT (cond != NULL);
+// 	ASSERT (lock != NULL);
+// 	ASSERT (!intr_context ());
+// 	ASSERT (lock_held_by_current_thread (lock));
+
+// 	if (!list_empty(&cond->waiters)) {
+//         struct semaphore_elem *w = list_entry(list_pop_front(&cond->waiters), struct semaphore_elem, elem);
+//         sema_up(&w->semaphore);
+
+//         if (!list_empty(get_ready_list()) && thread_current()->priority < list_entry(list_front(get_ready_list()), struct thread, elem)->priority) {
+//             				thread_yield();
+//         }
+//     }
+// }
 
 /* Wakes up all threads, if any, waiting on COND (protected by
    LOCK).  LOCK must be held before calling this function.

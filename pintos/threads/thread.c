@@ -710,3 +710,7 @@ allocate_tid(void)
 
 	return tid;
 }
+
+struct list* get_ready_list() {
+	return &ready_list;
+}

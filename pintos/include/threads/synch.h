@@ -13,6 +13,7 @@ struct semaphore {
 struct semaphore_elem {
   struct list_elem elem;   // cond->waiters에 들어갈 노드
   struct semaphore semaphore;   // 이 waiter만 깨우는 개인 세마(초기값 0)
+  int priority;
 };
 
 void sema_init (struct semaphore *, unsigned value);
