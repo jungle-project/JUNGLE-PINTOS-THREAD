@@ -215,21 +215,22 @@ void lock_acquire (struct lock *lock) {
 	ASSERT (!intr_context ());
 	ASSERT (!lock_held_by_current_thread (lock));
 
-   // 3️⃣
-   struct thread *cur = thread_current();
+   // 3️⃣ Donation(multiple)
+   struct thread *cur = thread_current();               // 현재 스레드(이후 모든 변경 기준)
 
    if (lock->holder != NULL) {                          /* 경합: 누군가 들고 있음 */
     enum intr_level old = intr_disable();
     cur->waiting_lock = lock;                           /* (nest) 전파 경로의 시작점 기록 */
-    list_push_back(&lock->holder->donations,            /* (multiple) 홀더에게 '나'를 도너로 등록 */
-                   &cur->donation_elem);
-    thread_refresh_priority(lock->holder);              /* (multiple) 홀더의 유효 priority 갱신(최댓값 반영) */
+    list_push_back(&lock->holder->donations, &cur->donation_elem);       /* 락 보유자(holder)의 donations 리스트에 **나(cur)**를 추가 */
+                  
+    thread_refresh_priority(lock->holder);              /* 홀더의 유효 priority 갱신(최댓값 반영) */
     intr_set_level(old);
 
     thread_donate_chain(cur);                           /* (nest) waiting_lock 체인을 따라 상류로 연쇄 갱신 */
     
     
     thread_yield_if_lower();                          /* ★ 중요: donation으로 READY 최상단이 바뀌었을 수 있으므로 즉시 선점 검사 */
+   
    // 3️⃣ donate-one: 락 홀더가 있고, 내가 더 높으면 홀더에게 기부
    // if (lock->holder != NULL) {
    //    struct thread *cur = thread_current();
@@ -281,14 +282,14 @@ void lock_release (struct lock *lock) {
 
    //3️⃣ 기부 해제: 내 우선순위를 원래 값(base_priority)으로 복원 
    enum intr_level old = intr_disable();
-   thread_remove_donations_with_lock(lock);              /* (multiple) 이 락에서 비롯된 기부만 제거 */
-   thread_refresh_priority(thread_current());            /* 남은 기부 + base로 유효 priority 재계산 */
+   thread_remove_donations_with_lock(lock);              /* (multiple1) 이 락에서 비롯된 기부만 제거 */
+   thread_refresh_priority(thread_current());            /* 유효 priority 재계산: max(base_priority, 남아있는 기부 최댓값) */
    // thread_current()->priority = thread_current()->base_priority;
 
    lock->holder = NULL;        // 락 소유권 해제
    intr_set_level(old);
 
-	sema_up (&lock->semaphore);
+	sema_up (&lock->semaphore);                            // 가장 높은 대기자 깨우기
    thread_yield_if_lower();                              /* 필요하면 즉시 양보(선점 보장) */
 }
 

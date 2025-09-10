@@ -100,19 +100,19 @@ void thread_yield_if_lower(void) {
   }
 }
 
-/* 이 락으로부터 온 기부만 제거 (락 해제 시 사용) */
+/* 이 락으로부터 온 기부만 제거 (락 해제 시 사용) (mutiple 1) */
 void thread_remove_donations_with_lock(struct lock *lock) {
-  struct thread *cur = thread_current();                                      // 기부를 "받는" 쪽 = 현재 스레드
-  for (struct list_elem *e = list_begin(&cur->donations);
-       e != list_end(&cur->donations); ) {
-    struct thread *donor = list_entry(e, struct thread, donation_elem);
-    struct list_elem *next = list_next(e);
-    if (donor->waiting_lock == lock) list_remove(e);
-    e = next;
+  struct thread *cur = thread_current();                  // 기부를 "받는" 쪽 = 현재(락 보유자) 스레드
+  
+  for (struct list_elem *e = list_begin(&cur->donations); e != list_end(&cur->donations); ) {
+    struct thread *donor = list_entry(e, struct thread, donation_elem);     // e 노드(=기부자 한 명)를 thread 구조체로 역참조
+    struct list_elem *next = list_next(e);                                  // 다음 노드 포인터를 미리 저장
+    if (donor->waiting_lock == lock) list_remove(e);                       // donor가 "이 lock을 기다리며" 나에게 기부하고 있던 항목이면 제거
+    e = next;                             // 다음 노드로
   }
 }
 
-/* [NEST] 기다리는 락 체인을 따라 위로 전파 (최대 8단계) */
+/* [NEST] 기다리는 락 체인을 따라 위로 우선순위 전파 (최대 8단계) */
 void thread_donate_chain(struct thread *donor) {         
   int depth = 0;                                         
   struct lock *lk = donor->waiting_lock;                 
@@ -400,14 +400,16 @@ thread_yield (void) {
 }
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
-// 2️⃣3️⃣ 우선순위 낮춤
+// 2️⃣3️⃣ 우선순위 올림/낮춤
 void thread_set_priority (int new_priority) {
-   enum intr_level old = intr_disable();
+   enum intr_level old = intr_disable();  
    struct thread *cur = thread_current();
-   cur->base_priority = new_priority;     /* 본래값만 갱신 */
-   thread_refresh_priority(cur);          /* donors 고려 재계산 */
+   
+   cur->base_priority = new_priority;          // 원래 값만 갱신
+   thread_refresh_priority(cur);              // donors 고려 "유효 우선순위" 재계산
    intr_set_level(old);
-   thread_yield_if_lower();               /* 최고가 아니면 양보 */
+   
+   thread_yield_if_lower();                  // 최고가 아니면 양보
 	// struct thread *cur = thread_current();
 
      
@@ -515,8 +517,7 @@ kernel_thread (thread_func *function, void *aux) {
 
 /* Does basic initialization of T as a blocked thread named
    NAME. */
-static void
-init_thread (struct thread *t, const char *name, int priority) {
+static void init_thread (struct thread *t, const char *name, int priority) {
 	ASSERT (t != NULL);
 	ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
 	ASSERT (name != NULL);
@@ -525,10 +526,12 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->status = THREAD_BLOCKED;
 	strlcpy (t->name, name, sizeof t->name);
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
-	t->priority = priority;
+	
+	t->priority = priority;                 // 유효 우선순위
 	t->base_priority = priority;            // 3️⃣ 원래 우선순위 저장(One)  => 복원 기준
 	list_init(&t->donations);               // 3️⃣ 기부자 목록 초기화(muti)
     t->waiting_lock = NULL;                 // 3️⃣ 현재 기다리는 락X(muti)
+	
 	t->magic = THREAD_MAGIC;
 }
 
