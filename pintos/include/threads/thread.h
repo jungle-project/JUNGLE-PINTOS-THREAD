@@ -97,6 +97,7 @@ struct thread {
 	int original_priority;				// 기존 우선순위
 	struct lock* waiting_on_lock;		/* 현재 스레드가 현재 획득을 기다리는 락 */
 	struct list holding_locks;			// 현재 스레드가 소유한 락의 목록
+	struct list_elem donation_elem;		// 우선순위 기부 리스트 엘리먼트
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
@@ -154,5 +155,11 @@ void thread_awake(int64_t wake_ticks);
 void update_next_tick_to_awake(int64_t ticks);
 int64_t get_next_tick_to_awake(void);
 bool thread_priority_comp(const struct list_elem* a, const struct list_elem* b, void* aux);
+struct list* get_ready_list();
+void donation_upsert(struct thread *donor, struct thread *holder);
+void donation (struct thread *donor);
+void refresh_priority(struct thread *t);
+void remove_donations(struct thread *t, struct lock *lock);
+bool cmp_donation_desc(const struct list_elem* a, const struct list_elem* b, void* aux);
 
 #endif /* threads/thread.h */

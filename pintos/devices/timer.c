@@ -95,7 +95,11 @@ timer_sleep (int64_t ticks) {
 	ASSERT (intr_get_level () == INTR_ON);
 
 	// 알람을 맞춰서 알람시간에 한번에 일어남
-	thread_sleep(ticks + start);
+	while (timer_elapsed(start) < ticks) 
+		//thread_yield(); //thread_yield(): CPU 생성하고 ready_list에 스레드를 삽입
+		thread_sleep(start + ticks);
+
+	// thread_sleep(ticks + start);
 
 	// busy waits 방식
 	// while 루프를 반복하면서 시간이 되면 깨어나 일어날 시간인지 체크 후 일어날 시간이 아니면, 다시 잠
