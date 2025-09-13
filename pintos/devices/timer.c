@@ -104,7 +104,7 @@ timer_sleep (int64_t ticks) {
  
 	int64_t wake = timer_ticks () + ticks;            // 지금 시각(틱 수) + 얼마나 잘지 = "깨울 절대 시각"을 계산
 	struct thread *cur = thread_current ();           // 현재 스레드
-
+	
 	enum intr_level old = intr_disable ();            // 현재 인터럽트 상태를 old에 저장 + 인터럽트 off(방해 금지 모드)
 	cur->wakeup_tick = wake;                          // 내가 깰 시각
 
