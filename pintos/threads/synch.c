@@ -321,14 +321,15 @@ cond_init (struct condition *cond) {
 
 // 2️⃣ condvar 정렬
 static bool cond_sema_cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+  // sa, sb: cond->waiters의 semaphore_elem 가리킴
   struct semaphore_elem *sa = list_entry(a, struct semaphore_elem, elem);
   struct semaphore_elem *sb = list_entry(b, struct semaphore_elem, elem);
 
-  // 각 세마포어의 waiters 맨 앞(thread)의 priority 비교
+  // 각 elem의 semaphore.waiters 맨 앞 스레드(priority)를 비교
   struct thread *ta = list_entry(list_front(&sa->semaphore.waiters), struct thread, elem);
   struct thread *tb = list_entry(list_front(&sb->semaphore.waiters), struct thread, elem);
 
-  return ta->priority > tb->priority;  // 내림차순
+  return ta->priority > tb->priority;  // 내림차순 정렬
 }
 
 
@@ -352,8 +353,7 @@ static bool cond_sema_cmp_priority(const struct list_elem *a, const struct list_
    interrupt handler.  This function may be called with
    interrupts disabled, but interrupts will be turned back on if
    we need to sleep. */
-void
-cond_wait (struct condition *cond, struct lock *lock) {
+void cond_wait (struct condition *cond, struct lock *lock) {
 	struct semaphore_elem waiter;
 
 	ASSERT (cond != NULL);
@@ -362,9 +362,9 @@ cond_wait (struct condition *cond, struct lock *lock) {
 	ASSERT (lock_held_by_current_thread (lock));
 
 	sema_init (&waiter.semaphore, 0);
-	list_push_back (&cond->waiters, &waiter.elem);
+	list_push_back (&cond->waiters, &waiter.elem);     // ✔ 정렬 안 함
 	lock_release (lock);
-	sema_down (&waiter.semaphore);
+	sema_down (&waiter.semaphore);                    // 여기서 실제 BLOCK (세마 waiters는 정렬됨)
 	lock_acquire (lock);
 }
 
@@ -375,8 +375,7 @@ cond_wait (struct condition *cond, struct lock *lock) {
    An interrupt handler cannot acquire a lock, so it does not
    make sense to try to signal a condition variable within an
    interrupt handler. */
-void
-cond_signal (struct condition *cond, struct lock *lock UNUSED) {
+void cond_signal (struct condition *cond, struct lock *lock UNUSED) {
 	ASSERT (cond != NULL);
 	ASSERT (lock != NULL);
 	ASSERT (!intr_context ());
@@ -385,11 +384,12 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED) {
 	// 2️⃣ condvar
 	if (!list_empty (&cond->waiters)){
 		// sema_up (&list_entry (list_pop_front (&cond->waiters), struct semaphore_elem, elem)->semaphore);
-        list_sort(&cond->waiters, cond_sema_cmp_priority, NULL);                                                // (1) cond->waiters를 “각 세마가 깨울 최고 우선순위 스레드” 기준으로 정렬
-
-        struct semaphore_elem *se = list_entry(list_pop_front(&cond->waiters), struct semaphore_elem, elem);    // (2) 맨 앞(= 가장 높은 우선순위를 깨울 수 있는 세마)을 꺼내고
-
-        sema_up(&se->semaphore);   //// (3) 그 세마를 올려서(sema_up) 해당 스레드를 깨움
+        // (1) cond->waiters를 “각 세마가 깨울 최고 우선순위 스레드” 기준으로 정렬
+        list_sort(&cond->waiters, cond_sema_cmp_priority, NULL);                                                
+        // (2) pop: 맨 앞(= 가장 높은 우선순위를 깨울 수 있는 세마)을 꺼내고
+        struct semaphore_elem *se = list_entry(list_pop_front(&cond->waiters), struct semaphore_elem, elem);    
+        // (3) 그 세마를 올려서(sema_up) 해당 스레드를 깨움
+        sema_up(&se->semaphore);   
   }
 }
 
