@@ -91,6 +91,11 @@ struct thread {
 	enum thread_status status;          /* Thread state. */
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
+	int64_t wakeup_tick;                /* 깨워야 할 tick */
+	int base_priority;                  /* 우선순위 기부 전의 본래 우선순위 */
+	struct list donations;              /* 우선순위 기부 리스트 */
+	struct lock *waiting_lock;          /* 이 스레드가 대기하고 있는 락 */
+	struct list_elem donation_elem; /* 우선순위 기부 리스트 엘리먼트 */
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
@@ -133,6 +138,13 @@ const char *thread_name (void);
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
 
+void refresh_priority(struct thread *t);
+void donate_chain(struct thread *donor);
+void remove_donations(struct thread *t, struct lock *lock);
+bool cmp_priority(const struct list_elem *a,
+						 const struct list_elem *b,
+						 void *aux UNUSED);
+
 int thread_get_priority (void);
 void thread_set_priority (int);
 
@@ -142,5 +154,6 @@ int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
 void do_iret (struct intr_frame *tf);
+struct list* get_ready_list();
 
 #endif /* threads/thread.h */
